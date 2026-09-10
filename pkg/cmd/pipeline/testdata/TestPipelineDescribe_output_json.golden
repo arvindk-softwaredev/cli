@@ -1,0 +1,11 @@
+{
+    "kind": "Pipeline",
+    "apiVersion": "tekton.dev/v1",
+    "metadata": {
+        "name": "pipeline",
+        "namespace": "ns"
+    },
+    "spec": {
+        "description": "a pipeline"
+    }
+}

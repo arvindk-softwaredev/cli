@@ -15,6 +15,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -2318,4 +2319,96 @@ func TestPipelineDescribe_with_OptionalWorkspaces(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 	golden.Assert(t, got, fmt.Sprintf("%s.golden", t.Name()))
+}
+
+func TestPipelineDescribe_output_json(t *testing.T) {
+	clock := test.FakeClock()
+
+	pipelines := []*v1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pipeline",
+				Namespace: "ns",
+			},
+			Spec: v1.PipelineSpec{
+				Description: "a pipeline",
+			},
+		},
+	}
+	namespaces := []*corev1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "ns",
+			},
+		},
+	}
+
+	version := "v1"
+	tdc := testDynamic.Options{}
+	dynamic, err := tdc.Client(
+		cb.UnstructuredP(pipelines[0], version),
+	)
+	if err != nil {
+		t.Errorf("unable to create dynamic client: %v", err)
+	}
+	cs, _ := test.SeedTestData(t, pipelinetest.Data{Namespaces: namespaces, Pipelines: pipelines})
+	cs.Pipeline.Resources = cb.APIResourceList(version, []string{"pipeline", "pipelinerun"})
+	p := &test.Params{Tekton: cs.Pipeline, Clock: clock, Kube: cs.Kube, Dynamic: dynamic}
+	pipeline := Command(p)
+
+	got, err := test.ExecuteCommand(pipeline, "desc", "-n", "ns", "pipeline", "-o", "json")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	var obj v1.Pipeline
+	if err := json.Unmarshal([]byte(got), &obj); err != nil {
+		t.Fatalf("output is not a valid JSON object: %v\n%s", err, got)
+	}
+	if obj.Name != "pipeline" {
+		t.Errorf("expected pipeline name 'pipeline', got %q", obj.Name)
+	}
+
+	golden.Assert(t, got, fmt.Sprintf("%s.golden", t.Name()))
+}
+
+func TestPipelineDescribe_invalid_output(t *testing.T) {
+	clock := test.FakeClock()
+
+	pipelines := []*v1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pipeline",
+				Namespace: "ns",
+			},
+		},
+	}
+	namespaces := []*corev1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "ns",
+			},
+		},
+	}
+
+	version := "v1"
+	tdc := testDynamic.Options{}
+	dynamic, err := tdc.Client(
+		cb.UnstructuredP(pipelines[0], version),
+	)
+	if err != nil {
+		t.Errorf("unable to create dynamic client: %v", err)
+	}
+	cs, _ := test.SeedTestData(t, pipelinetest.Data{Namespaces: namespaces, Pipelines: pipelines})
+	cs.Pipeline.Resources = cb.APIResourceList(version, []string{"pipeline", "pipelinerun"})
+	p := &test.Params{Tekton: cs.Pipeline, Clock: clock, Kube: cs.Kube, Dynamic: dynamic}
+	pipeline := Command(p)
+
+	_, err = test.ExecuteCommand(pipeline, "desc", "-n", "ns", "pipeline", "-o", "csv")
+	if err == nil {
+		t.Fatal("expected error for invalid output format")
+	}
+	if !strings.Contains(err.Error(), "csv") {
+		t.Errorf("expected error to mention csv, got %q", err.Error())
+	}
 }

@@ -134,6 +134,14 @@ func startCommand(p cli.Params) *cobra.Command {
 
     tkn pipeline start foo -s ServiceAccountName -n bar
 
+Preview a PipelineRun as JSON without creating it:
+
+    tkn pipeline start foo --dry-run -o json
+
+Preview a PipelineRun as YAML without creating it:
+
+    tkn pipeline start foo --dry-run -o yaml
+
  Re-run the last PipelineRun for a specific pipeline
 
     tkn pipeline start foo --last -n bar
@@ -228,7 +236,7 @@ For passing the workspaces via flags:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opt.stream = &cli.Stream{
 				Out: cmd.OutOrStdout(),
-				Err: cmd.OutOrStderr(),
+				Err: cmd.ErrOrStderr(),
 			}
 
 			// Handle different scenarios based on flags
@@ -750,7 +758,7 @@ func (opt *startOptions) executePipelineRun(pr *v1beta1.PipelineRun, cs *cli.Cli
 	}
 
 	// Show success message and logs if requested
-	fmt.Fprintf(opt.stream.Out, "PipelineRun started: %s\n", prCreated.Name)
+	fmt.Fprintf(opt.stream.Err, "PipelineRun started: %s\n", prCreated.Name)
 	if !opt.ShowLog {
 		inOrderString := "\nIn order to track the PipelineRun progress run:\ntkn pipelinerun "
 		if opt.TektonOptions.Context != "" {
@@ -758,11 +766,11 @@ func (opt *startOptions) executePipelineRun(pr *v1beta1.PipelineRun, cs *cli.Cli
 		}
 		inOrderString += fmt.Sprintf("logs %s -f -n %s\n", prCreated.Name, prCreated.Namespace)
 
-		fmt.Fprint(opt.stream.Out, inOrderString)
+		fmt.Fprint(opt.stream.Err, inOrderString)
 		return nil
 	}
 
-	fmt.Fprintf(opt.stream.Out, "Waiting for logs to be available...\n")
+	fmt.Fprintf(opt.stream.Err, "Waiting for logs to be available...\n")
 	runLogOpts := &options.LogOptions{
 		PipelineName:    pipelineName,
 		PipelineRunName: prCreated.Name,

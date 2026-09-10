@@ -15,7 +15,9 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
+	"sigs.k8s.io/yaml"
 )
 
 func TestPipelinesList_invalid_namespace_v1beta1(t *testing.T) {
@@ -1165,5 +1168,140 @@ func TestPipelineList_in_all_namespaces_with_output_yaml_flag(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
+	var got []v1.Pipeline
+	if err := yaml.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("output is not valid YAML: %v\n%s", err, output)
+	}
+	if len(got) != 6 {
+		t.Errorf("expected 6 pipelines, got %d", len(got))
+	}
+
 	golden.Assert(t, output, fmt.Sprintf("%s.golden", t.Name()))
+}
+
+func TestPipelineList_output_json(t *testing.T) {
+	clock := test.FakeClock()
+	version := "v1"
+
+	pdata := []*v1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "tomatoes",
+				Namespace:         "namespace",
+				CreationTimestamp: metav1.Time{Time: clock.Now().Add(-1 * time.Minute)},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "mangoes",
+				Namespace:         "namespace",
+				CreationTimestamp: metav1.Time{Time: clock.Now().Add(-20 * time.Second)},
+			},
+		},
+	}
+
+	nsList := []*corev1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "namespace",
+			},
+		},
+	}
+
+	tdc := testDynamic.Options{}
+	dynamic, err := tdc.Client(
+		cb.UnstructuredP(pdata[0], version),
+		cb.UnstructuredP(pdata[1], version),
+	)
+	if err != nil {
+		t.Errorf("unable to create dynamic client: %v", err)
+	}
+	cs, _ := test.SeedTestData(t, pipelinetest.Data{Pipelines: pdata, Namespaces: nsList})
+	p := &test.Params{Tekton: cs.Pipeline, Clock: clock, Kube: cs.Kube, Dynamic: dynamic}
+	cs.Pipeline.Resources = cb.APIResourceList(version, []string{"pipeline"})
+	pipeline := Command(p)
+
+	output, err := test.ExecuteCommand(pipeline, "list", "-n", "namespace", "-o", "json")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	var got []v1.Pipeline
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("output is not a valid JSON array: %v\n%s", err, output)
+	}
+	if len(got) != 2 {
+		t.Errorf("expected 2 pipelines, got %d", len(got))
+	}
+
+	names := map[string]bool{}
+	for _, p := range got {
+		names[p.Name] = true
+	}
+	if !names["tomatoes"] || !names["mangoes"] {
+		t.Errorf("unexpected pipeline names in JSON output: %v", names)
+	}
+
+	golden.Assert(t, output, fmt.Sprintf("%s.golden", t.Name()))
+}
+
+func TestPipelineList_empty_output_json(t *testing.T) {
+	nsList := []*corev1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "foo",
+			},
+		},
+	}
+
+	cs, _ := test.SeedTestData(t, pipelinetest.Data{Namespaces: nsList})
+	cs.Pipeline.Resources = cb.APIResourceList("v1", []string{"pipeline"})
+	tdc := testDynamic.Options{}
+	dc, err := tdc.Client()
+	if err != nil {
+		t.Errorf("unable to create dynamic client: %v", err)
+	}
+
+	p := &test.Params{Tekton: cs.Pipeline, Kube: cs.Kube, Dynamic: dc}
+	pipeline := Command(p)
+	output, err := test.ExecuteCommand(pipeline, "list", "-n", "foo", "-o", "json")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	var got []v1.Pipeline
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("output is not a valid JSON array: %v\n%s", err, output)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty JSON array, got %d items", len(got))
+	}
+}
+
+func TestPipelineList_invalid_output(t *testing.T) {
+	nsList := []*corev1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "foo",
+			},
+		},
+	}
+
+	cs, _ := test.SeedTestData(t, pipelinetest.Data{Namespaces: nsList})
+	cs.Pipeline.Resources = cb.APIResourceList("v1", []string{"pipeline"})
+	tdc := testDynamic.Options{}
+	dc, err := tdc.Client()
+	if err != nil {
+		t.Errorf("unable to create dynamic client: %v", err)
+	}
+
+	p := &test.Params{Tekton: cs.Pipeline, Kube: cs.Kube, Dynamic: dc}
+	pipeline := Command(p)
+	_, err = test.ExecuteCommand(pipeline, "list", "-n", "foo", "-o", "csv")
+	if err == nil {
+		t.Fatal("expected error for invalid output format")
+	}
+	if !strings.Contains(err.Error(), "csv") {
+		t.Errorf("expected error to mention csv, got %q", err.Error())
+	}
 }

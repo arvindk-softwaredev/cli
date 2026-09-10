@@ -28,7 +28,6 @@ import (
 	"go.uber.org/multierr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	cliopts "k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
 // pipelineExists validates that the arguments are valid pipeline names
@@ -55,7 +54,7 @@ func pipelineExists(args []string, p cli.Params) ([]string, error) {
 
 func deleteCommand(p cli.Params) *cobra.Command {
 	opts := &options.DeleteOptions{Resource: "Pipeline", ForceDelete: false, DeleteRelated: false, DeleteAllNs: false}
-	f := cliopts.NewPrintFlags("delete")
+	var output string
 	eg := `Delete Pipelines with names 'foo' and 'bar' in namespace 'quux'
 
     tkn pipeline delete foo bar -n quux
@@ -63,6 +62,14 @@ func deleteCommand(p cli.Params) *cobra.Command {
 or
 
     tkn p rm foo bar -n quux
+
+Delete a Pipeline and print the result as JSON:
+
+    tkn pipeline delete foo -f -o json
+
+Delete a Pipeline and print the result as YAML:
+
+    tkn pipeline delete foo -f -o yaml
 `
 
 	c := &cobra.Command{
@@ -77,10 +84,14 @@ or
 			"commandType": "main",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := formatted.ValidateOutput(output); err != nil {
+				return err
+			}
+
 			s := &cli.Stream{
 				In:  cmd.InOrStdin(),
 				Out: cmd.OutOrStdout(),
-				Err: cmd.OutOrStderr(),
+				Err: cmd.ErrOrStderr(),
 			}
 
 			availablePNames, errs := pipelineExists(args, p)
@@ -92,13 +103,13 @@ or
 				return err
 			}
 
-			if err := deletePipelines(opts, s, p, availablePNames); err != nil {
+			if err := deletePipelines(opts, s, p, availablePNames, output); err != nil {
 				return err
 			}
 			return errs
 		},
 	}
-	f.AddFlags(c)
+	c.Flags().StringVarP(&output, "output", "o", "", formatted.OutputFlagUsage)
 	c.Flags().BoolVarP(&opts.ForceDelete, "force", "f", false, "Whether to force deletion (default: false)")
 	c.Flags().BoolVarP(&opts.DeleteRelated, "prs", "", false, "Whether to delete Pipeline(s) and related resources (PipelineRuns) (default: false)")
 	c.Flags().BoolVarP(&opts.DeleteAllNs, "all", "", false, "Delete all Pipelines in a namespace (default: false)")
@@ -106,7 +117,7 @@ or
 	return c
 }
 
-func deletePipelines(opts *options.DeleteOptions, s *cli.Stream, p cli.Params, pNames []string) error {
+func deletePipelines(opts *options.DeleteOptions, s *cli.Stream, p cli.Params, pNames []string, output string) error {
 	pipelinerunGroupResource := schema.GroupVersionResource{Group: "tekton.dev", Resource: "pipelineruns"}
 
 	cs, err := p.Clients()
@@ -132,11 +143,38 @@ func deletePipelines(opts *options.DeleteOptions, s *cli.Stream, p cli.Params, p
 	default:
 		d.Delete(pNames)
 	}
+
+	if formatted.IsStructured(output) {
+		deleted := d.Deleted()
+		if deleted == nil {
+			deleted = []string{}
+		}
+		related := d.RelatedDeleted()
+		if related == nil {
+			related = []string{}
+		}
+		result := formatted.DeleteResult{
+			Kind:      "Pipeline",
+			Deleted:   deleted,
+			Namespace: p.Namespace(),
+			All:       opts.DeleteAllNs,
+		}
+		if opts.DeleteRelated {
+			result.RelatedKind = "PipelineRun"
+			result.RelatedDeleted = related
+		}
+		if err := formatted.PrintStructuredOutput(s.Out, output, result); err != nil {
+			return err
+		}
+		return d.Errors()
+	}
+
+	status := &cli.Stream{Out: s.Err, Err: s.Err}
 	if !opts.DeleteAllNs {
-		d.PrintSuccesses(s)
+		d.PrintSuccesses(status)
 	} else if opts.DeleteAllNs {
 		if d.Errors() == nil {
-			fmt.Fprintf(s.Out, "All Pipelines deleted in namespace %q\n", p.Namespace())
+			fmt.Fprintf(s.Err, "All Pipelines deleted in namespace %q\n", p.Namespace())
 		}
 	}
 	return d.Errors()

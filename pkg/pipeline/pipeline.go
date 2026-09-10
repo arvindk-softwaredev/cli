@@ -69,3 +69,11 @@ func GetPipeline(gr schema.GroupVersionResource, c *cli.Clients, pName, ns strin
 	}
 	return &pipeline, nil
 }
+
+// SetTypeMeta sets apiVersion and kind from the Pipeline GVK registered in the Tekton API.
+func SetTypeMeta(p *v1.Pipeline) {
+	if p == nil {
+		return
+	}
+	p.GetObjectKind().SetGroupVersionKind(p.GetGroupVersionKind())
+}
